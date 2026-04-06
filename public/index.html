@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Order Parser</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 720px;
+        margin: 40px auto;
+        padding: 0 16px;
+        background: #f7f7f8;
+        color: #111;
+      }
+      h1 {
+        margin-bottom: 8px;
+      }
+      p {
+        margin-top: 0;
+        color: #444;
+      }
+      textarea {
+        width: 100%;
+        min-height: 140px;
+        padding: 12px;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        font-size: 14px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+      button {
+        margin-top: 12px;
+        padding: 10px 16px;
+        border: 0;
+        border-radius: 8px;
+        background: #2563eb;
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.65;
+        cursor: not-allowed;
+      }
+      pre {
+        margin-top: 16px;
+        background: #111827;
+        color: #e5e7eb;
+        padding: 12px;
+        border-radius: 8px;
+        overflow: auto;
+        min-height: 120px;
+      }
+      .error {
+        color: #b91c1c;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <textarea id="messageInput" placeholder="اكتب الرسالة هنا..."></textarea>
+    <button id="parseBtn">تحويل</button>
+
+    <div id="errorText" class="error"></div>
+    <pre style="direction: ltr" id="jsonOutput">{}</pre>
+
+    <script>
+      const messageInput = document.getElementById("messageInput");
+      const parseBtn = document.getElementById("parseBtn");
+      const jsonOutput = document.getElementById("jsonOutput");
+      const errorText = document.getElementById("errorText");
+
+      async function parseMessage() {
+        const message = messageInput.value.trim();
+        errorText.textContent = "";
+
+        if (!message) {
+          errorText.textContent = "الرجاء إدخال رسالة أولاً.";
+          jsonOutput.textContent = "{}";
+          return;
+        }
+
+        parseBtn.disabled = true;
+        parseBtn.textContent = "جاري التحويل...";
+
+        try {
+          const response = await fetch("/parse-order", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "حدث خطأ أثناء المعالجة.");
+          }
+
+          jsonOutput.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+          errorText.textContent = error.message;
+          jsonOutput.textContent = "{}";
+        } finally {
+          parseBtn.disabled = false;
+          parseBtn.textContent = "تحويل";
+        }
+      }
+
+      parseBtn.addEventListener("click", parseMessage);
+    </script>
+  </body>
+</html>

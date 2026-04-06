@@ -1,6 +1,8 @@
 import express from "express";
-import dotenv from "dotenv";
+import Cerebras from "@cerebras/cerebras_cloud_sdk";
 import cors from "cors";
+import dotenv from "dotenv";
+
 dotenv.config();
 
 const app = express();
@@ -8,7 +10,12 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-function parseOrder(message) {
+const cerebras = new Cerebras({
+  apiKey: process.env.CEREBRAS_API_KEY,
+});
+
+// دالة المنطق الصارم لاستخراج القيم بدقة
+function strictParse(message) {
   // id
   const idMatch = message.match(/#\s*(\d+)/);
   const id = idMatch ? idMatch[1] : null;
@@ -18,7 +25,7 @@ function parseOrder(message) {
   if (/sell/i.test(message)) deal = "Sell";
   else if (/buy/i.test(message)) deal = "Buy";
 
-  // type
+  // type: اكتشاف جميع أنواع الأوامر
   let type = "Unknown";
   if (/{\s*NEW\s*}/i.test(message)) type = "NEW";
   else if (/{\s*CLOSED\s*}/i.test(message)) type = "CLOSED";
@@ -28,9 +35,14 @@ function parseOrder(message) {
   else if (/Moved SL/i.test(message)) type = "Moved SL";
   else if (/Moved TP/i.test(message)) type = "Moved TP";
 
-  // symbol: عادة يأتي بعد "ORDER -" مباشرة قبل Buy/Sell
-  const symbolMatch = message.match(/ORDER\s*-\s*([A-Z]{3,6})/i);
-  const symbol = symbolMatch ? symbolMatch[1].toUpperCase() : null;
+  // symbol: بعد "ORDER -" مباشرة أو أول كلمة أحرف كبيرة قبل Buy/Sell
+  let symbol = null;
+  const orderMatch = message.match(/ORDER\s*-\s*([A-Z]{3,6})/i);
+  if (orderMatch) symbol = orderMatch[1].toUpperCase();
+  else {
+    const symbolMatch = message.match(/([A-Z]{3,6})\s+(Buy|Sell)/i);
+    if (symbolMatch) symbol = symbolMatch[1].toUpperCase();
+  }
 
   // lots
   const lotsMatch = message.match(/Lots:\s*([\d.]+)/i);
@@ -47,12 +59,58 @@ function parseOrder(message) {
   return { id, deal, type, symbol, lots, sl, tp };
 }
 
-app.post("/parse-order", (req, res) => {
-  const message = req.body.message;
-  if (!message) return res.status(400).json({ error: "الرسالة غير موجودة" });
+// استخراج JSON من نص النموذج
+function extractJSON(rawText) {
+  try {
+    const match = rawText.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    return {};
+  } catch {
+    return {};
+  }
+}
 
-  const parsed = parseOrder(message);
-  res.json(parsed);
+// API endpoint
+app.post("/parse-order", async (req, res) => {
+  try {
+    const message = req.body.message;
+    if (!message) return res.status(400).json({ error: "الرسالة غير موجودة" });
+
+    // استدعاء Cerebras للمساعدة في الحالات المعقدة
+    const completion = await cerebras.chat.completions.create({
+      model: "llama3.1-8b",
+      messages: [
+        {
+          role: "system",
+          content:
+            "أنت مساعد يحول رسائل التداول إلى JSON فقط، بدون أي نص إضافي. الحقول: id, deal (Buy/Sell), type (NEW/CLOSED/Set SL/Set TP/Moved SL & TP), symbol, lots, sl, tp.",
+        },
+        {
+          role: "user",
+          content: `اقرأ الرسالة التالية واخرج JSON:
+${message}`,
+        },
+      ],
+      max_completion_tokens: 512,
+      temperature: 0,
+      top_p: 1,
+      stream: false,
+    });
+
+    const rawJSON = completion.choices[0].message.content;
+    const modelData = extractJSON(rawJSON);
+
+    // تطبيق المنطق الصارم لضمان دقة 100%
+    const strictData = strictParse(message);
+
+    // دمج البيانات: المنطق الصارم له الأولوية
+    const finalData = { ...modelData, ...strictData };
+
+    res.json(finalData);
+  } catch (err) {
+    console.error("حدث خطأ:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;

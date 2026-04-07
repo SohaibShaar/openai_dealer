@@ -282,7 +282,9 @@
 
       // إضافة أو تحديث طلب في الجدول
       function addOrUpdateOrder(order, isNew) {
-        orders.set(order.id, order);
+        // merge للتحديثات بدلاً من replace حتى لا تضيع الحقول الأخرى
+        const existing = orders.get(order.id);
+        orders.set(order.id, existing ? { ...existing, ...order } : order);
         renderOrders(isNew ? order.id : null);
       }
 

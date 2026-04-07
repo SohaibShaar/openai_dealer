@@ -21,21 +21,23 @@ const cerebras = new Cerebras({
   apiKey: process.env.CEREBRAS_API_KEY,
 });
 
-// MySQL Connection
+// MySQL Connection Pool
 const dbConfig = {
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
   database: process.env.DB_NAME || "trading_db",
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
 };
 
 let db;
 
-// إنشاء اتصال بقاعدة البيانات
 async function initDatabase() {
   try {
-    db = await mysql.createConnection(dbConfig);
-    console.log("✅ متصل بقاعدة البيانات MySQL");
+    db = mysql.createPool(dbConfig);
+    console.log("✅ متصل بقاعدة البيانات MySQL (Pool)");
 
     // إنشاء الجدول إذا لم يكن موجوداً
     await db.execute(`
@@ -107,45 +109,31 @@ const session = new StringSession("");
   client.addEventHandler(async (event) => {
     const message = event.message;
 
-    // تأكد أنها رسالة قناة (يمكن تعديلها للقنوات فقط)
     if (message.peerId?.channelId) {
       const messageText = message.message;
-      console.log("\n📩 رسالة جديدة من Telegram:");
-      console.log(messageText);
-      console.log("\n🔄 جاري إرسالها للـ API...");
+      console.log("\n📩 رسالة جديدة من Telegram:\n" + messageText);
 
       try {
-        // إرسال الرسالة إلى الـ API المحلي
-        const response = await fetch("http://localhost:3000/parse-order", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ message: messageText }),
-        });
+        // استدعاء مباشر بدون HTTP round-trip
+        const result = await parseOrder(messageText);
 
-        const result = await response.json();
+        console.log("\n✅ النتيجة:\n" + JSON.stringify(result, null, 2));
 
-        console.log("\n✅ النتيجة من API:");
-        console.log(JSON.stringify(result, null, 2));
-
-        // توضيح نوع العملية
-        if (result.type === "NEW") {
-          console.log("📌 العملية: إضافة طلب جديد");
-        } else if (result.type === "CLOSED" || result.type === "DELETE") {
-          console.log("🗑️ العملية: حذف/إغلاق طلب");
-        } else if (result.type && result.type.includes("DELETE")) {
-          console.log("✏️ العملية: حذف جزئي");
-        } else if (
-          result.type &&
-          (result.type.includes("Set") || result.type.includes("Moved"))
-        ) {
-          console.log("✏️ العملية: تعديل/تحديث");
-        }
+        if (result.type === "NEW") console.log("📌 إضافة طلب جديد");
+        else if (result.type === "CLOSED" || result.type === "DELETE") console.log("🗑️ حذف/إغلاق طلب");
+        else if (result.type?.includes("DELETE")) console.log("✏️ حذف جزئي");
+        else if (result.type?.includes("Set") || result.type?.includes("Moved")) console.log("✏️ تعديل/تحديث");
 
         console.log("\n" + "=".repeat(50) + "\n");
+
+        // DB في الخلفية بدون انتظار
+        if (result.id && db) {
+          processOrderInDB(result).catch(err =>
+            console.error("❌ خطأ في DB:", err.message)
+          );
+        }
       } catch (error) {
-        console.error("\n❌ خطأ في الاتصال بالـ API:", error.message);
+        console.error("\n❌ خطأ:", error.message);
       }
     }
   }, new NewMessage({}));
@@ -230,19 +218,14 @@ function extractJSON(rawText) {
   }
 }
 
-// API
-app.post("/parse-order", async (req, res) => {
-  try {
-    const message = req.body.message;
-    if (!message) return res.status(400).json({ error: "الرسالة غير موجودة" });
-
-    // استدعاء Cerebras AI مع تعليمات محسنة ومفصلة
-    const completion = await cerebras.chat.completions.create({
-      model: "llama3.1-8b",
-      messages: [
-        {
-          role: "system",
-          content: `You are an expert trading message parser. Extract information from trading messages and return ONLY valid JSON, no additional text.
+// دالة المعالجة المشتركة بين API و Telegram
+async function parseOrder(message) {
+  const completion = await cerebras.chat.completions.create({
+    model: "llama3.1-8b",
+    messages: [
+      {
+        role: "system",
+        content: `You are an expert trading message parser. Extract information from trading messages and return ONLY valid JSON, no additional text.
 
 Required fields:
 - id: Order number (from #123 format)
@@ -268,192 +251,105 @@ Output: {"id":"123","deal":"Buy","type":"NEW","symbol":"XAUUSD","lots":0.50,"sl"
 
 Message: "Moved SL & TP #456 EURUSD Sell"
 Output: {"id":"456","deal":"Sell","type":"Moved SL & TP","symbol":"EURUSD","lots":null,"sl":null,"tp":null,"balance":null}`,
-        },
-        {
-          role: "user",
-          content: `Parse this trading message and return ONLY JSON:
+      },
+      {
+        role: "user",
+        content: `Parse this trading message and return ONLY JSON:\n\n${message}`,
+      },
+    ],
+    max_completion_tokens: 800,
+    temperature: 0.1,
+    top_p: 0.95,
+    stream: false,
+  });
 
-${message}`,
-        },
-      ],
-      max_completion_tokens: 800,
-      temperature: 0.1,
-      top_p: 0.95,
-      stream: false,
-    });
+  const modelData = extractJSON(completion.choices[0].message.content);
+  const strictData = strictParse(message);
+  const finalData = {};
 
-    const rawJSON = completion.choices[0].message.content;
-    const modelData = extractJSON(rawJSON);
-
-    // تطبيق المنطق الصارم كطبقة تحقق إضافية
-    const strictData = strictParse(message);
-
-    // دمج ذكي: استخدم AI للحقول المعقدة والمنطق الصارم للتحقق
-    const finalData = {};
-
-    // استخدم AI كمصدر رئيسي مع التحقق من المنطق الصارم
-    for (const key of [
-      "id",
-      "deal",
-      "type",
-      "symbol",
-      "lots",
-      "sl",
-      "tp",
-      "balance",
-    ]) {
-      // إذا كان المنطق الصارم وجد قيمة واضحة، استخدمها
-      if (
-        strictData[key] !== null &&
-        strictData[key] !== undefined &&
-        strictData[key] !== "Unknown"
-      ) {
-        finalData[key] = strictData[key];
-      }
-      // وإلا استخدم نتيجة AI
-      else if (modelData[key] !== null && modelData[key] !== undefined) {
-        finalData[key] = modelData[key];
-      }
-      // وإلا null
-      else {
-        finalData[key] = null;
-      }
+  for (const key of ["id", "deal", "type", "symbol", "lots", "sl", "tp", "balance"]) {
+    if (strictData[key] !== null && strictData[key] !== undefined && strictData[key] !== "Unknown") {
+      finalData[key] = strictData[key];
+    } else if (modelData[key] !== null && modelData[key] !== undefined) {
+      finalData[key] = modelData[key];
+    } else {
+      finalData[key] = null;
     }
+  }
 
-    // حفظ البيانات في قاعدة البيانات حسب نوع الرسالة
-    if (finalData.id && db) {
-      try {
-        const orderType = finalData.type;
+  return finalData;
+}
 
-        // حالات الحذف
-        if (orderType === "DELETE" || orderType === "CLOSED") {
-          // حذف الطلب من قاعدة البيانات
-          await db.execute(`DELETE FROM orders WHERE id = ?`, [finalData.id]);
-          console.log(
-            `🗑️ تم حذف Order #${finalData.id} من قاعدة البيانات (${orderType})`,
-          );
+// دالة DB في الخلفية — لا تُنتظر من الـ API
+async function processOrderInDB(finalData) {
+  const { id, type: orderType } = finalData;
 
-          // إرسال إشعار بالحذف للعملاء
-          broadcastToClients({ ...finalData, action: "delete" });
-        }
-        // حالات الحذف الجزئي (DELETE SL, DELETE TP, DELETE LOTS)
-        else if (orderType === "DELETE SL") {
-          await db.execute(`UPDATE orders SET sl = NULL WHERE id = ?`, [
-            finalData.id,
-          ]);
-          console.log(`✏️ تم حذف SL من Order #${finalData.id}`);
+  if (orderType === "DELETE" || orderType === "CLOSED") {
+    await db.execute(`DELETE FROM orders WHERE id = ?`, [id]);
+    console.log(`🗑️ حذف Order #${id} (${orderType})`);
+    broadcastToClients({ ...finalData, action: "delete" });
 
-          // جلب البيانات المحدثة وإرسالها
-          const [rows] = await db.execute(`SELECT * FROM orders WHERE id = ?`, [
-            finalData.id,
-          ]);
-          if (rows.length > 0) {
-            broadcastToClients({ ...rows[0], action: "update" });
-          }
-        } else if (orderType === "DELETE TP") {
-          await db.execute(`UPDATE orders SET tp = NULL WHERE id = ?`, [
-            finalData.id,
-          ]);
-          console.log(`✏️ تم حذف TP من Order #${finalData.id}`);
+  } else if (orderType === "DELETE SL") {
+    await db.execute(`UPDATE orders SET sl = NULL WHERE id = ?`, [id]);
+    console.log(`✏️ حذف SL من Order #${id}`);
+    broadcastToClients({ id, sl: null, action: "update" });
 
-          const [rows] = await db.execute(`SELECT * FROM orders WHERE id = ?`, [
-            finalData.id,
-          ]);
-          if (rows.length > 0) {
-            broadcastToClients({ ...rows[0], action: "update" });
-          }
-        } else if (orderType === "DELETE LOTS") {
-          await db.execute(`UPDATE orders SET lots = NULL WHERE id = ?`, [
-            finalData.id,
-          ]);
-          console.log(`✏️ تم حذف Lots من Order #${finalData.id}`);
+  } else if (orderType === "DELETE TP") {
+    await db.execute(`UPDATE orders SET tp = NULL WHERE id = ?`, [id]);
+    console.log(`✏️ حذف TP من Order #${id}`);
+    broadcastToClients({ id, tp: null, action: "update" });
 
-          const [rows] = await db.execute(`SELECT * FROM orders WHERE id = ?`, [
-            finalData.id,
-          ]);
-          if (rows.length > 0) {
-            broadcastToClients({ ...rows[0], action: "update" });
-          }
-        }
-        // حالات التعديل (Set SL, Set TP, Moved SL, Moved TP, Moved SL & TP)
-        else if (orderType === "Set SL" || orderType === "Moved SL") {
-          await db.execute(`UPDATE orders SET sl = ? WHERE id = ?`, [
-            finalData.sl,
-            finalData.id,
-          ]);
-          console.log(`✏️ تم تحديث SL للـ Order #${finalData.id}`);
+  } else if (orderType === "DELETE LOTS") {
+    await db.execute(`UPDATE orders SET lots = NULL WHERE id = ?`, [id]);
+    console.log(`✏️ حذف Lots من Order #${id}`);
+    broadcastToClients({ id, lots: null, action: "update" });
 
-          const [rows] = await db.execute(`SELECT * FROM orders WHERE id = ?`, [
-            finalData.id,
-          ]);
-          if (rows.length > 0) {
-            broadcastToClients({ ...rows[0], action: "update" });
-          }
-        } else if (orderType === "Set TP" || orderType === "Moved TP") {
-          await db.execute(`UPDATE orders SET tp = ? WHERE id = ?`, [
-            finalData.tp,
-            finalData.id,
-          ]);
-          console.log(`✏️ تم تحديث TP للـ Order #${finalData.id}`);
+  } else if (orderType === "Set SL" || orderType === "Moved SL") {
+    await db.execute(`UPDATE orders SET sl = ? WHERE id = ?`, [finalData.sl, id]);
+    console.log(`✏️ تحديث SL للـ Order #${id}`);
+    broadcastToClients({ id, sl: finalData.sl, action: "update" });
 
-          const [rows] = await db.execute(`SELECT * FROM orders WHERE id = ?`, [
-            finalData.id,
-          ]);
-          if (rows.length > 0) {
-            broadcastToClients({ ...rows[0], action: "update" });
-          }
-        } else if (orderType === "Moved SL & TP") {
-          await db.execute(`UPDATE orders SET sl = ?, tp = ? WHERE id = ?`, [
-            finalData.sl,
-            finalData.tp,
-            finalData.id,
-          ]);
-          console.log(`✏️ تم تحديث SL & TP للـ Order #${finalData.id}`);
+  } else if (orderType === "Set TP" || orderType === "Moved TP") {
+    await db.execute(`UPDATE orders SET tp = ? WHERE id = ?`, [finalData.tp, id]);
+    console.log(`✏️ تحديث TP للـ Order #${id}`);
+    broadcastToClients({ id, tp: finalData.tp, action: "update" });
 
-          const [rows] = await db.execute(`SELECT * FROM orders WHERE id = ?`, [
-            finalData.id,
-          ]);
-          if (rows.length > 0) {
-            broadcastToClients({ ...rows[0], action: "update" });
-          }
-        }
-        // حالة إضافة طلب جديد (NEW) أو أي نوع آخر
-        else {
-          await db.execute(
-            `INSERT INTO orders (id, deal, type, symbol, lots, sl, tp, balance) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE 
-             deal = VALUES(deal), 
-             type = VALUES(type), 
-             symbol = VALUES(symbol), 
-             lots = VALUES(lots), 
-             sl = VALUES(sl), 
-             tp = VALUES(tp), 
-             balance = VALUES(balance)`,
-            [
-              finalData.id,
-              finalData.deal,
-              finalData.type,
-              finalData.symbol,
-              finalData.lots,
-              finalData.sl,
-              finalData.tp,
-              finalData.balance,
-            ],
-          );
-          console.log(
-            `✅ تم حفظ Order #${finalData.id} في قاعدة البيانات (${orderType || "NEW"})`,
-          );
+  } else if (orderType === "Moved SL & TP") {
+    await db.execute(`UPDATE orders SET sl = ?, tp = ? WHERE id = ?`, [finalData.sl, finalData.tp, id]);
+    console.log(`✏️ تحديث SL & TP للـ Order #${id}`);
+    broadcastToClients({ id, sl: finalData.sl, tp: finalData.tp, action: "update" });
 
-          // إرسال البيانات لجميع العملاء المتصلين عبر WebSocket
-          broadcastToClients({ ...finalData, action: "add" });
-        }
-      } catch (dbError) {
-        console.error("❌ خطأ في معالجة البيانات:", dbError.message);
-      }
-    }
+  } else {
+    await db.execute(
+      `INSERT INTO orders (id, deal, type, symbol, lots, sl, tp, balance) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE 
+       deal=VALUES(deal), type=VALUES(type), symbol=VALUES(symbol),
+       lots=VALUES(lots), sl=VALUES(sl), tp=VALUES(tp), balance=VALUES(balance)`,
+      [id, finalData.deal, finalData.type, finalData.symbol, finalData.lots, finalData.sl, finalData.tp, finalData.balance]
+    );
+    console.log(`✅ حفظ Order #${id} (${orderType || "NEW"})`);
+    broadcastToClients({ ...finalData, action: "add" });
+  }
+}
 
+// API
+app.post("/parse-order", async (req, res) => {
+  try {
+    const message = req.body.message;
+    if (!message) return res.status(400).json({ error: "الرسالة غير موجودة" });
+
+    const finalData = await parseOrder(message);
+
+    // رد فوري قبل DB
     res.json(finalData);
+
+    // DB في الخلفية بدون انتظار
+    if (finalData.id && db) {
+      processOrderInDB(finalData).catch(err =>
+        console.error("❌ خطأ في DB:", err.message)
+      );
+    }
   } catch (err) {
     console.error("حدث خطأ:", err);
     res.status(500).json({ error: err.message });

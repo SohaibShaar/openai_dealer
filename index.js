@@ -27,8 +27,12 @@ function strictParse(message) {
 
   // type: اكتشاف جميع أنواع الأوامر (محسن)
   let type = "Unknown";
-  if (/deleted/i.test(message))
-    type = "DELETE"; // دعم Deleted
+
+  // ✅ التعامل مع الحذف الجزئي
+  if (/deleted sl/i.test(message)) type = "DELETE SL";
+  else if (/deleted tp/i.test(message)) type = "DELETE TP";
+  else if (/deleted lot/i.test(message)) type = "DELETE LOTS";
+  else if (/deleted/i.test(message)) type = "DELETE";
   else if (/{\s*NEW\s*}/i.test(message)) type = "NEW";
   else if (/{\s*CLOSED\s*}/i.test(message)) type = "CLOSED";
   else if (/Set SL/i.test(message)) type = "Set SL";

@@ -74,7 +74,13 @@ function strictParse(message) {
   const tpMatch = message.match(/TP:\s*([\d.]+)/i);
   const tp = tpMatch ? parseFloat(tpMatch[1]) : null;
 
-  return { id, deal, type, symbol, lots, sl, tp };
+  // 🔹 Balance
+  const balanceMatch = message.match(/💰\s*Balance:\s*([\d\s,]+)/);
+  const balance = balanceMatch
+    ? parseFloat(balanceMatch[1].replace(/[\s,]/g, ""))
+    : null;
+
+  return { id, deal, type, symbol, lots, sl, tp, balance };
 }
 
 // استخراج JSON من نص النموذج

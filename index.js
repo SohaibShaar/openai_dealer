@@ -28,7 +28,7 @@ function strictParse(message) {
   // type: اكتشاف جميع أنواع الأوامر (محسن)
   let type = "Unknown";
   if (/deleted/i.test(message))
-    type = "CLOSED"; // دعم Deleted
+    type = "DELETE"; // دعم Deleted
   else if (/{\s*NEW\s*}/i.test(message)) type = "NEW";
   else if (/{\s*CLOSED\s*}/i.test(message)) type = "CLOSED";
   else if (/Set SL/i.test(message)) type = "Set SL";

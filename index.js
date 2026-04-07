@@ -25,9 +25,11 @@ function strictParse(message) {
   if (/sell/i.test(message)) deal = "Sell";
   else if (/buy/i.test(message)) deal = "Buy";
 
-  // type: اكتشاف جميع أنواع الأوامر
+  // type: اكتشاف جميع أنواع الأوامر (محسن)
   let type = "Unknown";
-  if (/{\s*NEW\s*}/i.test(message)) type = "NEW";
+  if (/deleted/i.test(message))
+    type = "CLOSED"; // دعم Deleted
+  else if (/{\s*NEW\s*}/i.test(message)) type = "NEW";
   else if (/{\s*CLOSED\s*}/i.test(message)) type = "CLOSED";
   else if (/Set SL/i.test(message)) type = "Set SL";
   else if (/Set TP/i.test(message)) type = "Set TP";
@@ -35,14 +37,26 @@ function strictParse(message) {
   else if (/Moved SL/i.test(message)) type = "Moved SL";
   else if (/Moved TP/i.test(message)) type = "Moved TP";
 
-  // symbol: بعد "ORDER -" مباشرة أو أول كلمة أحرف كبيرة قبل Buy/Sell
+  // symbol: بعد "on" أو "ORDER -" أو قبل Buy/Sell
   let symbol = null;
-  const orderMatch = message.match(/ORDER\s*-\s*([A-Z]{3,6})/i);
-  if (orderMatch) symbol = orderMatch[1].toUpperCase();
+
+  // الحالة 1: "on XAUUSD"
+  const onMatch = message.match(/on\s+([A-Z]{3,10})/i);
+  if (onMatch) symbol = onMatch[1].toUpperCase();
+  // الحالة 2: ORDER -
   else {
-    const symbolMatch = message.match(/([A-Z]{3,6})\s+(Buy|Sell)/i);
-    if (symbolMatch) symbol = symbolMatch[1].toUpperCase();
+    const orderMatch = message.match(/ORDER\s*-\s*([A-Z]{3,10})/i);
+    if (orderMatch) symbol = orderMatch[1].toUpperCase();
+    // الحالة 3: قبل Buy/Sell (fallback)
+    else {
+      const symbolMatch = message.match(/([A-Z]{3,10})\s+(Buy|Sell)/i);
+      if (symbolMatch) symbol = symbolMatch[1].toUpperCase();
+    }
   }
+
+  // فلترة كلمات خاطئة
+  const invalidWords = ["NEW", "CLOSED", "DELETED", "LIMIT"];
+  if (symbol && invalidWords.includes(symbol)) symbol = null;
 
   // lots
   const lotsMatch = message.match(/Lots:\s*([\d.]+)/i);

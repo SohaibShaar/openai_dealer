@@ -111,7 +111,8 @@
         margin-top: 15px;
         font-size: 14px;
       }
-      th, td {
+      th,
+      td {
         padding: 10px;
         text-align: center;
         border-bottom: 1px solid #e5e7eb;
@@ -156,7 +157,8 @@
         background: #f59e0b;
         color: white;
       }
-      .badge.set, .badge.moved {
+      .badge.set,
+      .badge.moved {
         background: #8b5cf6;
         color: white;
       }
@@ -168,47 +170,48 @@
         animation: flash 1s ease-in-out;
       }
       @keyframes flash {
-        0%, 100% { background: transparent; }
-        50% { background: #fef3c7; }
+        0%,
+        100% {
+          background: transparent;
+        }
+        50% {
+          background: #fef3c7;
+        }
       }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>🚀 Order Parser & Live Monitor</h1>
-
-      <div id="wsStatus" class="status disconnected">
-        ⚠️ غير متصل بالسيرفر
-      </div>
+      <div id="wsStatus" class="status disconnected">⚠️ غير متصل بالسيرفر</div>
 
       <div class="grid">
         <div class="panel">
-          <h2>📝 تجربة API</h2>
-          <textarea id="messageInput" placeholder="اكتب الرسالة هنا لاختبار API..."></textarea>
-          <button id="parseBtn">تحويل</button>
+          <textarea id="messageInput" placeholder="رسالة التليغرام"></textarea>
+          <button id="parseBtn">إدخال</button>
           <div id="errorText" class="error"></div>
           <pre id="jsonOutput">{}</pre>
         </div>
 
         <div class="panel">
-          <h2>📊 الطلبات المباشرة (Live Orders)</h2>
           <div class="orders-container">
             <table id="ordersTable">
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>النوع</th>
-                  <th>الصفقة</th>
-                  <th>الرمز</th>
+                  <th>Type</th>
+                  <th>Deal</th>
+                  <th>Symbol</th>
                   <th>Lots</th>
                   <th>SL</th>
                   <th>TP</th>
-                  <th>الرصيد</th>
+                  <th>Balance</th>
                 </tr>
               </thead>
               <tbody id="ordersBody">
                 <tr>
-                  <td colspan="8" style="text-align: center; padding: 20px; color: #6b7280;">
+                  <td
+                    colspan="8"
+                    style="text-align: center; padding: 20px; color: #6b7280">
                     في انتظار البيانات...
                   </td>
                 </tr>
@@ -242,18 +245,17 @@
         };
 
         ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          
-          // معالجة الحالات المختلفة
-          if (data.action === "delete") {
-            // حذف الطلب من القائمة
-            deleteOrder(data.id);
-          } else if (data.action === "update") {
-            // تحديث الطلب
-            addOrUpdateOrder(data, true);
-          } else {
-            // إضافة طلب جديد
-            addOrUpdateOrder(data, true);
+          try {
+            const data = JSON.parse(event.data);
+            if (data.action === "delete") {
+              deleteOrder(data.id);
+            } else if (data.action === "update") {
+              addOrUpdateOrder(data, true);
+            } else {
+              addOrUpdateOrder(data, true);
+            }
+          } catch (e) {
+            console.error("خطأ في معالجة رسالة WebSocket:", e);
           }
         };
 
@@ -274,7 +276,7 @@
         try {
           const response = await fetch("/orders");
           const existingOrders = await response.json();
-          existingOrders.forEach(order => addOrUpdateOrder(order, false));
+          existingOrders.forEach((order) => addOrUpdateOrder(order, false));
         } catch (error) {
           console.error("خطأ في تحميل الطلبات:", error);
         }
@@ -282,8 +284,10 @@
 
       // إضافة أو تحديث طلب في الجدول
       function addOrUpdateOrder(order, isNew) {
-        // merge للتحديثات بدلاً من replace حتى لا تضيع الحقول الأخرى
         const existing = orders.get(order.id);
+        // إذا كان update لـ id غير موجود في الـ Map، تجاهله
+        if (!existing && isNew === true && order.action === "update") return;
+        // merge للتحديثات بدلاً من replace حتى لا تضيع الحقول الأخرى
         orders.set(order.id, existing ? { ...existing, ...order } : order);
         renderOrders(isNew ? order.id : null);
       }
@@ -313,36 +317,38 @@
         ordersBody.innerHTML = "";
         const sortedOrders = Array.from(orders.values()).reverse();
 
-        sortedOrders.forEach(order => {
-          const row = document.createElement("tr");
-          if (flashId === order.id) {
-            row.className = "new-order-flash";
-          }
+        const fmt = (v) => (v !== null && v !== undefined ? v : "-");
+        const fmtNum = (v) =>
+          v !== null && v !== undefined ? Number(v).toLocaleString() : "-";
 
-          const dealBadge = order.deal 
-            ? `<span class="badge ${order.deal.toLowerCase()}">${order.deal}</span>` 
+        sortedOrders.forEach((order) => {
+          const row = document.createElement("tr");
+          if (flashId === order.id) row.className = "new-order-flash";
+
+          const dealBadge = order.deal
+            ? `<span class="badge ${order.deal.toLowerCase()}">${order.deal}</span>`
             : "-";
-          
-          // تحديد اللون حسب نوع الرسالة
+
           let typeBadgeClass = "";
           if (order.type === "NEW") typeBadgeClass = "new";
           else if (order.type === "CLOSED") typeBadgeClass = "closed";
-          else if (order.type && order.type.includes("DELETE")) typeBadgeClass = "delete";
-          else if (order.type && (order.type.includes("Set") || order.type.includes("Moved"))) typeBadgeClass = "update";
-          
-          const typeBadge = order.type 
-            ? `<span class="badge ${typeBadgeClass}">${order.type}</span>` 
+          else if (order.type?.includes("DELETE")) typeBadgeClass = "delete";
+          else if (order.type?.includes("Set") || order.type?.includes("Moved"))
+            typeBadgeClass = "update";
+
+          const typeBadge = order.type
+            ? `<span class="badge ${typeBadgeClass}">${order.type}</span>`
             : "-";
 
           row.innerHTML = `
-            <td><strong>#${order.id || "-"}</strong></td>
+            <td><strong>#${fmt(order.id)}</strong></td>
             <td>${typeBadge}</td>
             <td>${dealBadge}</td>
-            <td><strong>${order.symbol || "-"}</strong></td>
-            <td>${order.lots !== null ? order.lots : "-"}</td>
-            <td>${order.sl !== null ? order.sl : "-"}</td>
-            <td>${order.tp !== null ? order.tp : "-"}</td>
-            <td>${order.balance !== null ? order.balance.toLocaleString() : "-"}</td>
+            <td><strong>${fmt(order.symbol)}</strong></td>
+            <td>${fmt(order.lots)}</td>
+            <td>${fmt(order.sl)}</td>
+            <td>${fmt(order.tp)}</td>
+            <td>${fmtNum(order.balance)}$</td>
           `;
 
           ordersBody.appendChild(row);
@@ -387,7 +393,7 @@
       }
 
       parseBtn.addEventListener("click", parseMessage);
-      
+
       // بدء الاتصال
       connectWebSocket();
     </script>

@@ -37,10 +37,9 @@ let db;
 
 async function initDatabase() {
   try {
-    db = mysql.createPool(dbConfig);
-    console.log(" متصل بقاعدة البيانات ");
+    const pool = mysql.createPool(dbConfig);
 
-    await db.execute(`
+    await pool.execute(`
       CREATE TABLE IF NOT EXISTS orders (
         id VARCHAR(50) PRIMARY KEY,
         deal VARCHAR(10),
@@ -53,8 +52,11 @@ async function initDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    db = pool;
+    console.log(" متصل بقاعدة البيانات ");
     console.log(" الجدول جاهز");
   } catch (error) {
+    db = null;
     console.error(" خطأ في الاتصال بقاعدة البيانات:", error.message);
   }
 }

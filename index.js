@@ -23,9 +23,10 @@ const cerebras = new Cerebras({
 
 // MySQL Connection Pool
 const dbConfig = {
-  host: process.env.env === "dev" ? "localhost" : process.env.DB_HOST,
+  host: process.env.DB_HOST || "127.0.0.1",
+  port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || "root",
-  password: process.env.env === "dev" ? "" : process.env.DB_PASSWORD,
+  password: process.env.DB_PASSWORD ?? "",
   database: process.env.DB_NAME || "trading_db",
   waitForConnections: true,
   connectionLimit: 10,

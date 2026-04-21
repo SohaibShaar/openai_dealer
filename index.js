@@ -57,6 +57,12 @@ async function initDatabase() {
     console.log(" الجدول جاهز");
   } catch (error) {
     db = null;
+    if (error?.code === "ER_ACCESS_DENIED_ERROR") {
+      console.error(
+        ` صلاحيات MySQL مرفوضة للمستخدم "${dbConfig.user}" من المضيف "${dbConfig.host}". تحقق من DB_USER/DB_PASSWORD وصلاحيات المستخدم على نفس المضيف.`,
+      );
+      return;
+    }
     console.error(" خطأ في الاتصال بقاعدة البيانات:", error.message);
   }
 }

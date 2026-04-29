@@ -348,9 +348,10 @@ async function processOrderInDB(finalData) {
     console.log(` حذف TP من Order #${id}`);
     broadcastToClients({ id, tp: null, action: "update" });
   } else if (orderType === "DELETE LOTS") {
-    const [r] = await db.execute(`UPDATE orders SET lots = NULL WHERE id = ?`, [
-      id,
-    ]);
+    const [r] = await db.execute(
+      `UPDATE orders SET lots = NULL WHERE id = ?`,
+      [id],
+    );
     if (r.affectedRows === 0)
       return console.warn(`⚠️ DELETE LOTS: Order #${id} غير موجود`);
     console.log(` حذف Lots من Order #${id}`);
